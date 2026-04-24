@@ -19,7 +19,6 @@ TH_ISO3 = "THA"
 def _connect() -> duckdb.DuckDBPyConnection:
     con = duckdb.connect()
     con.execute("INSTALL httpfs; LOAD httpfs;")
-    con.execute("INSTALL spatial; LOAD spatial;")
     return con
 
 
@@ -32,11 +31,16 @@ def list_files(prefix: str = "") -> list[str]:
     return [r[0] for r in rows]
 
 
-def describe(path: str | None = None) -> list[tuple]:
-    """Inspect column schema of a parquet file to find the country column."""
+def describe(path: str | None = None):
+    """Inspect column schema to find the country column.
+
+    Prints (column_name, column_type) rows.
+    """
     con = _connect()
-    path = path or f"{FTW_BASE}/*.parquet"
-    return con.execute(f"DESCRIBE SELECT * FROM read_parquet('{path}') LIMIT 0").fetchall()
+    path = path or f"{FTW_BASE}/**/*.parquet"
+    return con.execute(
+        f"DESCRIBE SELECT * FROM read_parquet('{path}') LIMIT 0"
+    ).fetchdf()
 
 
 def load_thailand(
@@ -76,16 +80,15 @@ def load_thailand(
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
     limit_sql = f"LIMIT {limit}" if limit else ""
 
+    # geometry ใน GeoParquet/fiboa เก็บเป็น WKB bytes อยู่แล้ว อ่านตรงได้
     sql = f"""
-        SELECT * EXCLUDE geometry,
-               ST_AsWKB(ST_GeomFromWKB(geometry)) AS geometry_wkb
+        SELECT *
         FROM read_parquet('{path}', hive_partitioning=true)
         {where_sql}
         {limit_sql}
     """
     df = con.execute(sql).fetchdf()
-    df["geometry"] = df["geometry_wkb"].apply(lambda b: wkb.loads(bytes(b)))
-    df = df.drop(columns=["geometry_wkb"])
+    df["geometry"] = df["geometry"].apply(lambda b: wkb.loads(bytes(b)))
     return gpd.GeoDataFrame(df, geometry="geometry", crs="EPSG:4326")
 
 
@@ -113,8 +116,7 @@ if __name__ == "__main__":
     args = p.parse_args()
 
     if args.inspect:
-        for col in describe():
-            print(col)
+        print(describe().to_string(index=False))
         raise SystemExit(0)
 
     print("Loading Thailand fields from FTW global-data ...")
